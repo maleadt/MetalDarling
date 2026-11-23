@@ -1,0 +1,420 @@
+name: Build
+
+# Builds Darling's .debs with the patch stack in stack.toml, publishes them with their source
+# as a GitHub release, builds the runtime image from them, pushes it to GHCR, and runs the
+# Metal.jl survey in it on a hosted runner (lavapipe). The release starts as a prerelease and
+# is promoted once the image has passed the smoke test.
+#
+# The package build follows Darling's own CI (darlinghq/darling, .github/workflows/actions.yaml).
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash   # -eo pipefail, unlike the default
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/metaldarling
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      skip: ${{ steps.tag.outputs.skip }}
+      publish: ${{ steps.tag.outputs.publish }}
+    steps:
+    - uses: actions/checkout@v4
+
+    # One release per commit of this repository, named after its date and short SHA. Its
+    # assets are never replaced: a finished release stops the run, and a prerelease left by a
+    # failed run has to be deleted first.
+    - name: Determine the release tag
+      id: tag
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        date=$(TZ=UTC git show -s --date=format-local:%Y%m%d --format=%cd HEAD)
+        tag=v$date-$(git rev-parse --short=7 HEAD)
+        echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        echo "publish=${{ github.ref == 'refs/heads/main' }}" >> "$GITHUB_OUTPUT"
+        tagged=$(git ls-remote origin "refs/tags/$tag" | cut -f1)
+        if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
+          echo "::error::Tag $tag exists and points at $tagged, not $GITHUB_SHA."
+          exit 1
+        fi
+        if prerelease=$(gh release view "$tag" --json isPrerelease --jq .isPrerelease 2>err); then
+          if [ "$prerelease" = false ]; then
+            echo "::notice::Release $tag already exists; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::error::A failed run left prerelease $tag. Delete it (gh release delete $tag --cleanup-tag) and run again."
+          exit 1
+        elif ! grep -qx 'release not found' err; then
+          cat err >&2
+          exit 1
+        fi
+        echo "skip=false" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    # The packages carry the distribution's codename and link against its libraries.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 360
+    outputs:
+      version: ${{ steps.changelog.outputs.version }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        path: metaldarling
+
+    - name: Free up space
+      run: |
+        df -h /
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup
+        df -h /
+
+    - name: Check out Darling and apply the stack
+      run: |
+        python3 -I metaldarling/scripts/apply-stack.py darling darling --lock stack.lock
+        cat stack.lock
+        df -h /
+
+    - name: Install packaging tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends devscripts equivs debhelper ccache
+
+    - name: Write debian/changelog
+      id: changelog
+      run: |
+        version=$(metaldarling/scripts/debian-changelog.sh darling ${{ github.run_number }})
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
+    # Archived before anything is built in the tree, then removed to save disk space.
+    - name: Archive the source
+      run: |
+        mkdir source
+        metaldarling/scripts/source-tarball.sh darling stack.lock source/darling-source.tar.xz
+        cp stack.lock source/
+
+    - name: Upload the source
+      uses: actions/upload-artifact@v4
+      with:
+        name: source
+        path: source/
+        compression-level: 0
+        overwrite: true
+
+    - name: Install build dependencies
+      run: |
+        rm -rf source
+        # outside the tree, which mk-build-deps would leave files in
+        cd "$RUNNER_TEMP"
+        sudo mk-build-deps -i -r -t "apt-get --no-install-recommends -y" "$GITHUB_WORKSPACE/darling/debian/control"
+
+    # As in Darling's CI: debuild scrubs the environment, so configure ccache system-wide,
+    # with sloppiness for a fresh checkout's timestamps and room for a whole build.
+    - name: Configure ccache
+      run: |
+        sudo tee /etc/ccache.conf > /dev/null <<EOF
+        cache_dir = ${HOME}/.ccache
+        max_size = 5G
+        compiler_check = content
+        sloppiness = time_macros,include_file_mtime,include_file_ctime
+        EOF
+
+    # Keyed by run, restored from the latest one: a stack bump only rebuilds what it changes.
+    - name: Restore ccache
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.ccache
+        key: ccache-deb-ubuntu-26.04-amd64-${{ github.run_id }}
+        restore-keys: ccache-deb-ubuntu-26.04-amd64-
+
+    - name: Build the packages
+      working-directory: darling
+      run: |
+        ccache --zero-stats
+        (while sleep 600; do echo "disk: $(df -h / | tail -1)"; done) &
+        debuild --preserve-envvar 'CCACHE_*' --no-lintian -us -uc -b
+        df -h /
+
+    - name: ccache statistics
+      if: always()
+      run: ccache --show-stats --verbose
+
+    # Saved even when the build fails, so a build that dies late leaves its objects behind.
+    - name: Save ccache
+      if: always() && needs.prepare.outputs.publish == 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.ccache
+        key: ccache-deb-ubuntu-26.04-amd64-${{ github.run_id }}
+
+    - name: Collect the packages
+      run: |
+        mkdir debs
+        mv ./*.deb ./*.buildinfo debs/
+        metaldarling/scripts/runtime-libs.sh debs > runtime-libs.sha256
+        cat runtime-libs.sha256
+        [ "$(wc -l < runtime-libs.sha256)" = 3 ]
+        mv runtime-libs.sha256 debs/
+        ls -l debs
+
+    - name: Upload the packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: debs
+        path: debs/
+        compression-level: 0
+        overwrite: true
+
+  release:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: debs
+        path: assets
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: source
+        path: assets
+
+    - name: Create the prerelease
+      run: |
+        cd assets
+        sha256sum -- * > SHA256SUMS
+        {
+          echo "Darling's packages built with the MetalDarling patch stack (\`stack.toml\` at ${{ github.sha }}), version \`${{ needs.build.outputs.version }}\`."
+          echo
+          echo "\`darling-source.tar.xz\` is the complete source they were built from, with this repository's recipe; \`stack.lock\` records the commits:"
+          echo
+          echo '```toml'
+          grep -v '^#' stack.lock
+          echo '```'
+        } > ../notes.md
+        gh release create "$TAG" --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+          --prerelease --title "$TAG" --notes-file ../notes.md -- *
+
+  image:
+    needs: [prepare, build, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to attach the image's package list to the release
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+    # A rerun of this job alone must not change what a finished release describes.
+    - name: Check that the release is still a prerelease
+      run: |
+        prerelease=$(gh release view "$TAG" --repo "${{ github.repository }}" --json isPrerelease --jq .isPrerelease)
+        [ "$prerelease" = true ] || { echo "::error::$TAG is already released"; exit 1; }
+
+    - uses: actions/checkout@v4
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: debs
+        path: context/debs
+
+    - name: Prepare the build context
+      id: julia
+      run: |
+        read -r version url sha256 < <(python3 -I -c '
+        import tomllib; j = tomllib.load(open("stack.toml", "rb"))["julia"]
+        print(j["version"], j["url"], j["sha256"])')
+        curl -fsSL -o "context/julia-$version-mac64.tar.gz" "$url"
+        echo "$sha256  context/julia-$version-mac64.tar.gz" | sha256sum -c
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        mv context/debs/runtime-libs.sha256 context/
+        rm context/debs/*.buildinfo
+        cp image/Dockerfile context/
+
+    - name: Log in to GHCR
+      run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+    - name: Build and push the image
+      id: push
+      run: |
+        release=${{ github.server_url }}/${{ github.repository }}/releases/tag/$TAG
+        docker pull ubuntu:26.04
+        base=$(docker image inspect -f '{{index .RepoDigests 0}}' ubuntu:26.04)
+        docker build --build-arg BASE="$base" \
+          --build-arg JULIA_VERSION=${{ steps.julia.outputs.version }} \
+          --label org.opencontainers.image.title=metaldarling \
+          --label "org.opencontainers.image.description=Darling with the MetalDarling patch stack, Mesa Vulkan drivers and macOS Julia. Source: $release" \
+          --label org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }} \
+          --label org.opencontainers.image.revision=${{ github.sha }} \
+          --label "org.opencontainers.image.version=$TAG" \
+          --label "org.opencontainers.image.url=$release" \
+          --label "org.opencontainers.image.base.name=$base" \
+          -t "$IMAGE:$TAG" context
+        docker push "$IMAGE:$TAG"
+        digest=$(docker image inspect -f '{{index .RepoDigests 0}}' "$IMAGE:$TAG")
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"
+        echo "Pushed \`$digest\`, based on \`$base\`" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Attach the image's package list to the release
+      run: |
+        docker run --rm "$IMAGE:$TAG" cat /etc/metaldarling/packages.txt > image-packages.txt
+        gh release upload "$TAG" --repo "${{ github.repository }}" --clobber image-packages.txt
+
+  smoke:
+    needs: [prepare, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      score: ${{ steps.survey.outputs.score }}
+    env:
+      DIGEST: ${{ needs.image.outputs.digest }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        path: metaldarling
+
+    - name: Free up space
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup
+        df -h /
+
+    # Metal.jl's CI will pull without credentials. A new GHCR package is private until its
+    # visibility is changed in the package settings, so this only warns.
+    - name: Check that the image is public
+      run: |
+        if DOCKER_CONFIG=$(mktemp -d) docker manifest inspect "$DIGEST" > /dev/null 2>&1; then
+          echo "The image can be pulled anonymously."
+        else
+          echo "::warning::$DIGEST can't be pulled anonymously; make the package public."
+        fi
+
+    - name: Read the Julia version
+      id: julia
+      run: python3 -I -c 'import tomllib; print("version=" + tomllib.load(open("metaldarling/stack.toml", "rb"))["julia"]["version"])' >> "$GITHUB_OUTPUT"
+
+    # the same Julia version as in the image, so the manifest resolves the same way
+    - uses: julia-actions/setup-julia@v2
+      with:
+        version: ${{ steps.julia.outputs.version }}
+
+    - name: Prepare Metal.jl and its depot
+      run: |
+        python3 -I metaldarling/scripts/apply-stack.py metal Metal.jl
+        printf '[Metal]\nallow_unsupported_devices = true\n' > Metal.jl/LocalPreferences.toml
+        julia metaldarling/scripts/make-depot.jl depot Metal.jl
+        df -h /
+
+    - name: Pull the image
+      run: |
+        echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+        docker pull "$DIGEST"
+
+    # Precompiling under Darling takes long; survey.jl's load timeout is meant for loading.
+    - name: Start Darling and load Metal.jl
+      run: |
+        metaldarling/scripts/run-darling.sh --image "$DIGEST" --container smoke --gpu lavapipe \
+          --metal Metal.jl --depot depot --timeout 5400 metaldarling/scripts/load-metal.jl
+
+    # 25 cases, each with survey.jl's 5-minute timeout, plus worker restarts
+    - name: Run the survey
+      id: survey
+      run: |
+        set +e
+        metaldarling/scripts/run-darling.sh --image "$DIGEST" --container smoke --gpu lavapipe \
+          --timeout 10800 metaldarling/scripts/survey.jl --logdir /Volumes/SystemRoot/root/work/logs |
+          tee survey.txt
+        rc=${PIPESTATUS[0]}
+        set -e
+        score=$(sed -n 's/^survey: \([0-9]*\/[0-9]*\)$/\1/p' survey.txt)
+        echo "score=$score" >> "$GITHUB_OUTPUT"
+        { echo "Survey on lavapipe: **${score:-none}**"; echo; echo '```'; cat survey.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+        # The score is informational; the job fails only if the survey didn't run every case.
+        [ "$rc" = 0 ] || { echo "::error::survey.jl exited with $rc"; exit 1; }
+        [ "${score#*/}" = 25 ] || { echo "::error::expected one survey score out of 25, got '$score'"; exit 1; }
+        if grep -E 'NOT RUN|\(loading Metal\)' survey.txt; then
+          echo "::error::the survey didn't run every case"; exit 1
+        fi
+        cases=$(grep -E '^.{16}(PASS|WRONG|ERROR|CRASH|TIMEOUT)' survey.txt | cut -c1-16 | sort -u | wc -l)
+        [ "$cases" = 25 ] || { echo "::error::$cases distinct case results, expected 25"; exit 1; }
+
+    - name: Collect the results
+      if: always()
+      run: |
+        mkdir -p results
+        cp survey.txt Metal.jl/Manifest.toml results/ || true
+        docker cp smoke:/root/work/logs results/ || true
+        docker exec smoke env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json vulkaninfo --summary > results/vulkaninfo.txt 2>&1 || true
+        metaldarling/scripts/env-info.sh smoke > results/env.txt 2>&1 || true
+
+    - name: Upload the results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: smoke
+        path: results/
+        overwrite: true
+
+  promote:
+    needs: [prepare, build, image, smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      DIGEST: ${{ needs.image.outputs.digest }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+    # A rerun of this job alone must not change what a finished release describes.
+    - name: Check that the release is still a prerelease
+      run: |
+        prerelease=$(gh release view "$TAG" --repo "${{ github.repository }}" --json isPrerelease --jq .isPrerelease)
+        [ "$prerelease" = true ] || { echo "::error::$TAG is already released"; exit 1; }
+
+    - name: Tag the image as latest
+      run: |
+        echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+        docker buildx imagetools create --prefer-index=false -t "$IMAGE:latest" "$DIGEST"
+
+    # Last: once this has run, the release is final.
+    - name: Promote the release
+      run: |
+        gh release view "$TAG" --repo "${{ github.repository }}" --json body --jq .body > notes.md
+        if ! grep -q '^Image: ' notes.md; then
+          {
+            echo
+            echo "Image: \`$DIGEST\`"
+            echo
+            echo "Survey on a hosted runner (lavapipe): ${{ needs.smoke.outputs.score }} ([run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}))"
+          } >> notes.md
+        fi
+        gh release edit "$TAG" --repo "${{ github.repository }}" --prerelease=false --latest --notes-file notes.md

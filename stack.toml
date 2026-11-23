@@ -1,0 +1,42 @@
+# What the workflow builds: Darling at a pinned commit, with some of its submodules moved to
+# an upstream base and our topic branches merged onto it, in order. Commits are full SHAs; a
+# topic's branch is informational (it says where to look when bumping) and may have moved on.
+# scripts/apply-stack.py materializes this and writes stack.lock.
+
+[darling]
+repo = "darlinghq/darling"
+commit = "cdc3eac33087557b3367cc778f7798274b5ca465"
+
+# Overrides are applied outermost first; a component's own submodules are initialized from
+# the result, so indium below is the one darling-metal's merged tree would pin, then replaced.
+[[darling.override]]
+path = "src/external/metal"
+repo = "darlinghq/darling-metal"
+base = "0be43f4a7c2798e60643c855c51de40249bb5dfb"           # main, 2026-11-23
+topics = [
+    { repo = "maleadt/darling-metal", branch = "tb/device-threadgroup-limits", commit = "810d00311f1306853a8d691d3089522705d73e55" },
+    { repo = "maleadt/darling-metal", branch = "tb/device-max-transfer-rate", commit = "b241bddfd31e081fc5b71818debedd7a010625d2" },
+    { repo = "maleadt/darling-metal", branch = "tb/pipeline-reflection-bindings", commit = "ef9188288d64456dd473c4f5e38a40e5237f0b05" },
+]
+
+[[darling.override]]
+path = "src/external/metal/deps/indium"
+repo = "darlinghq/indium"
+base = "329f82e2aea0094c098c447ea177549060b314a1"           # main, 2026-11-23
+topics = [
+    { repo = "maleadt/indium", branch = "tb/addressing-prototype", commit = "96a6c66abd339c9334c70501a793242bb13bdfab" },
+]
+
+# The official macOS x86_64 Julia, unpacked into the image.
+[julia]
+version = "1.13.4"
+url = "https://julialang-s3.julialang.org/bin/mac/x64/1.13/julia-1.13.4-mac64.tar.gz"
+sha256 = "c84de0fcb4268841f296fd56c47c27383d81358033428389b0d1882b110b9bcd"
+
+# The Metal.jl the smoke test runs the survey with.
+[metal]
+repo = "JuliaGPU/Metal.jl"
+base = "46b81d7e0db51beede1f9accb309c9c48c3c38e8"           # tb/capability-probes (#1174)
+topics = [
+    { repo = "JuliaGPU/Metal.jl", branch = "tb/simd-width", commit = "afbc4e8fb5e413bcf6051cb04a2a0e666f0b5c57" },   # #1175
+]
