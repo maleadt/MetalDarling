@@ -4,19 +4,21 @@
 Usage: scripts/apply-stack.py darling DIR [--lock FILE]
        scripts/apply-stack.py metal DIR
 
-`darling` checks out Darling at its pinned commit with all submodules (shallow, as Darling's
-own CI does), except that each override's submodule is moved to its base commit and its topics
-are merged onto it in order. The submodule is first checked out at the commit its parent
-records, from the URL in the parent's .gitmodules (relative URLs resolve against the parent's
-upstream), so that commit must still exist. Submodules inside an override are initialized from the merged
-tree. Nothing is committed in the parent repositories: their gitlinks still name the upstream
-commits, and the working tree is what gets built. The resolved state is written to the lock
-file (default DIR/../stack.lock).
+`darling` checks out Darling at its base commit, merges its topics, and initializes all
+submodules (shallow, as Darling's own CI does), except that each override's submodule is moved
+to its own base commit and gets its own topics. An override's submodule is first checked out at
+the commit its parent records, from the URL in the parent's .gitmodules (relative URLs resolve
+against the parent's upstream), so that commit must still exist. Submodules inside an override
+are initialized from the result. Nothing is committed in the parent repositories for the
+overrides: their gitlinks still name the upstream commits, and the working tree is what gets
+built. The resolved state is written to the lock file (default DIR/../stack.lock).
 
 `metal` checks out the Metal.jl used by the smoke test the same way.
 
-Merge commits get a fixed author, committer and date (the base commit's), so the same
-stack.toml gives the same commit IDs. A topic whose branch has moved past its pinned commit
+Topics are merged in order. A topic with `pick = true` is cherry-picked instead (only its
+commit), for a branch based on a later upstream commit than the base. Merges and picks get a
+fixed author or committer and date (the base commit's), so the same stack.toml gives the same
+commit IDs. A topic whose branch has moved past its pinned commit
 only gets a warning: the pin is what is built.
 """
 
@@ -77,9 +79,22 @@ def merge_topics(cwd, spec):
                GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
     for t in spec.get("topics", []):
         # explicit, so that the user's merge.ff or commit.gpgSign can't change the result
-        git(cwd, "merge", "--quiet", "--ff", "--no-gpg-sign", "--no-edit",
-            "-m", f"Merge {t['repo']} {t['branch']}", t["commit"], env=env)
+        if t.get("pick", False):
+            # keeps the topic's author
+            git(cwd, "cherry-pick", "--no-gpg-sign", "-x", t["commit"],
+                env={k: v for k, v in env.items() if not k.startswith("GIT_AUTHOR_")})
+        else:
+            git(cwd, "merge", "--quiet", "--ff", "--no-gpg-sign", "--no-edit",
+                "-m", f"Merge {t['repo']} {t['branch']}", t["commit"], env=env)
     return git(cwd, "rev-parse", "HEAD", capture=True)
+
+
+def lock_entry(cwd, spec, head):
+    tree = git(cwd, "rev-parse", "HEAD^{tree}", capture=True)
+    topics = "".join(f'    "{t["repo"]} {t["branch"]} {t["commit"]}{" (picked)" if t.get("pick") else ""}",\n'
+                     for t in spec.get("topics", []))
+    return (f'repo = "{spec["repo"]}"\nbase = "{spec["base"]}"\nhead = "{head}"\n'
+            f'tree = "{tree}"\ntopics = [\n{topics}]\n')
 
 
 def submodule_paths(cwd):
@@ -104,12 +119,8 @@ def init_submodules(root, rel, overrides, lock):
             subdir = os.path.join(root, sub)
             gitlink = git(subdir, "rev-parse", "HEAD", capture=True)
             head = merge_topics(subdir, spec)
-            tree = git(subdir, "rev-parse", "HEAD^{tree}", capture=True)
-            lock.append(f'[[override]]\npath = "{sub}"\nrepo = "{spec["repo"]}"\n'
-                        f'gitlink = "{gitlink}"\nbase = "{spec["base"]}"\n'
-                        f'head = "{head}"\ntree = "{tree}"\ntopics = [\n'
-                        + "".join(f'    "{t["repo"]} {t["branch"]} {t["commit"]}",\n'
-                                  for t in spec.get("topics", [])) + "]\n")
+            lock.append(f'[[override]]\npath = "{sub}"\ngitlink = "{gitlink}"\n'
+                        + lock_entry(subdir, spec, head))
         init_submodules(root, sub, overrides, lock)
 
 
@@ -125,12 +136,16 @@ def new_repo(path, repo):
 def darling(path, lockfile, stack):
     d = stack["darling"]
     new_repo(path, d["repo"])
-    fetch(path, d["repo"], d["commit"], depth=1)
-    git(path, "checkout", "--quiet", "--detach", d["commit"])
+    if d.get("topics"):
+        head = merge_topics(path, d)
+    else:
+        fetch(path, d["repo"], d["base"], depth=1)
+        git(path, "checkout", "--quiet", "--detach", d["base"])
+        head = d["base"]
     overrides = {o["path"]: o for o in d.get("override", [])}
     if len(overrides) != len(d.get("override", [])):
         sys.exit("apply-stack: two overrides for one path")
-    lock = [f'[darling]\nrepo = "{d["repo"]}"\ncommit = "{d["commit"]}"\n']
+    lock = ["[darling]\n" + lock_entry(path, d, head)]
     init_submodules(path, "", overrides, lock)
     if overrides:
         sys.exit(f"apply-stack: no submodule at {', '.join(overrides)}")

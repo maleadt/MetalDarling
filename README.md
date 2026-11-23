@@ -3,8 +3,10 @@
 Builds [Darling](https://github.com/darlinghq/darling) with patches that make
 [Metal.jl](https://github.com/JuliaGPU/Metal.jl) work on Linux, through Darling's Metal
 implementation over Vulkan ([darling-metal](https://github.com/darlinghq/darling-metal) and
-[Indium](https://github.com/darlinghq/indium)). The patches are pull requests on their way
-upstream; this repository lets Metal.jl's CI and Linux developers use them before they land.
+[Indium](https://github.com/darlinghq/indium)), plus fixes to Darling itself (darling,
+darlingserver, darling-xnu, darling-syslog) that Julia runs into. The patches are pull
+requests on their way upstream; this repository lets Metal.jl's CI and Linux developers use
+them before they land.
 
 Each [release](https://github.com/maleadt/MetalDarling/releases) has:
 
@@ -79,8 +81,9 @@ KernelAbstractions' precompile workload turned off in the depot (it hangs under 
 
 ## Bumping the stack
 
-`stack.toml` pins Darling's commit and, for each patched submodule, an upstream base commit and
-the topic branches merged onto it, in order, by full commit SHA. To pick up new commits, change
+`stack.toml` pins, for Darling and for each patched submodule, an upstream base commit and the
+topic branches merged onto it, in order, by full commit SHA. A topic marked `pick = true` is
+cherry-picked instead, for a branch based on a later upstream commit than the base. To pick up new commits, change
 the SHAs (`git ls-remote https://github.com/<fork> <branch>` gives a branch's head), and remove
 a topic once upstream has merged it and the base has moved past it. Topics must merge cleanly;
 check locally with

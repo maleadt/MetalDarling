@@ -1,18 +1,50 @@
-# What the workflow builds: Darling at a pinned commit, with some of its submodules moved to
-# an upstream base and our topic branches merged onto it, in order. Commits are full SHAs; a
+# What the workflow builds: Darling at an upstream base commit with our topic branches merged
+# onto it, in order, and some of its submodules likewise moved to a base and given topics. Commits are full SHAs; a
 # topic's branch is informational (it says where to look when bumping) and may have moved on.
 # scripts/apply-stack.py materializes this and writes stack.lock.
 
 [darling]
 repo = "darlinghq/darling"
-commit = "cdc3eac33087557b3367cc778f7798274b5ca465"
+base = "1d8f60b259636cd000020356e86058dae556e705"           # master, 2026-11-23
+topics = [
+    { repo = "maleadt/darling", branch = "tb/launcher-zombie-server", commit = "eaf007e93c8e8cbeae175eebcfe345c6e99f733c" },
+    { repo = "maleadt/darling", branch = "tb/coredata-stub-install", commit = "6bd246cb5c6c71169c71a0eadad68f3dd9d0f7be" },
+]
 
 # Overrides are applied outermost first; a component's own submodules are initialized from
 # the result, so indium below is the one darling-metal's merged tree would pin, then replaced.
 [[darling.override]]
+path = "src/external/darlingserver"
+repo = "darlinghq/darlingserver"
+base = "a31d7b9509abf51fb6f0163320caaf17d7f6de5f"           # main, 2026-11-23 (darling pins 7edc8eb)
+topics = [
+    { repo = "maleadt/darlingserver", branch = "tb/suspend-during-exception", commit = "9016893e5867824cfb9bf91708d9b3312d310a50" },
+    { repo = "maleadt/darlingserver", branch = "tb/exception-state", commit = "4264590f3ddcb4977cdbda83d0176746a6fbfe63" },
+    { repo = "maleadt/darlingserver", branch = "tb/exc-bad-access-code", commit = "386e399c43adf542fc9554dc72d0815711906bbe" },
+    { repo = "maleadt/darlingserver", branch = "tb/thread-abort", commit = "079c33039bdba3571bb74a9358533e1603b1f09a" },
+]
+
+# The branch is based on a later main; its one commit applies to darling's pin.
+[[darling.override]]
+path = "src/external/xnu"
+repo = "darlinghq/darling-xnu"
+base = "f2d41ae1f9d89105ff809b075012757101e20c48"           # darling's pin
+topics = [
+    { repo = "maleadt/darling-xnu", branch = "tb/exception-state", commit = "5a91cc2a97d7f52a430bb0aafa61f5889755028c", pick = true },
+]
+
+[[darling.override]]
+path = "src/external/syslog"
+repo = "darlinghq/darling-syslog"
+base = "55aab056c72d2505268f899a08af1c556675433a"           # darling's pin
+topics = [
+    { repo = "maleadt/darling-syslog", branch = "tb/syslogd-startup-deadlock", commit = "03bc3d135ad1d3f0e8815602132e2f4eb4c47f9f" },
+]
+
+[[darling.override]]
 path = "src/external/metal"
 repo = "darlinghq/darling-metal"
-base = "0be43f4a7c2798e60643c855c51de40249bb5dfb"           # main, 2026-11-23
+base = "803a408bced80a5a2147063391a86fbe9f325409"           # darling's pin (main, 2026-11-23)
 topics = [
     { repo = "maleadt/darling-metal", branch = "tb/device-threadgroup-limits", commit = "810d00311f1306853a8d691d3089522705d73e55" },
     { repo = "maleadt/darling-metal", branch = "tb/device-max-transfer-rate", commit = "b241bddfd31e081fc5b71818debedd7a010625d2" },
@@ -22,7 +54,7 @@ topics = [
 [[darling.override]]
 path = "src/external/metal/deps/indium"
 repo = "darlinghq/indium"
-base = "329f82e2aea0094c098c447ea177549060b314a1"           # main, 2026-11-23
+base = "329f82e2aea0094c098c447ea177549060b314a1"           # darling-metal's pin (main, 2026-11-23)
 topics = [
     { repo = "maleadt/indium", branch = "tb/addressing-prototype", commit = "96a6c66abd339c9334c70501a793242bb13bdfab" },
 ]
