@@ -338,11 +338,20 @@ jobs:
         echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
         docker pull "$DIGEST"
 
-    # Precompiling under Darling takes long; survey.jl's load timeout is meant for loading.
+    # Precompilation, before the survey and its load timeout. A precompile process sometimes
+    # spins forever under Darling (seen in CodecBzip2); a retry keeps what was precompiled.
     - name: Start Darling and load Metal.jl
       run: |
-        metaldarling/scripts/run-darling.sh --image "$DIGEST" --container smoke --gpu lavapipe \
-          --metal Metal.jl --depot depot --timeout 5400 metaldarling/scripts/load-metal.jl
+        for attempt in 1 2 3; do
+          rc=0
+          metaldarling/scripts/run-darling.sh --image "$DIGEST" --container smoke --gpu lavapipe \
+            --metal Metal.jl --depot depot --timeout 1200 metaldarling/scripts/load-metal.jl || rc=$?
+          [ $rc = 124 ] || exit $rc
+          echo "::warning::Loading Metal.jl timed out (attempt $attempt)"
+          mkdir -p results
+          docker exec smoke ps -eo pid,ppid,stat,etime,time,args > "results/ps-load-$attempt.txt" 2>&1 || true
+        done
+        exit 1
 
     # 25 cases, each with survey.jl's 5-minute timeout, plus worker restarts
     - name: Run the survey
@@ -372,6 +381,7 @@ jobs:
         mkdir -p results
         cp survey.txt Metal.jl/Manifest.toml results/ || true
         docker cp smoke:/root/work/logs results/ || true
+        docker exec smoke ps -eo pid,ppid,stat,etime,time,args > results/ps.txt 2>&1 || true
         docker exec smoke env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json vulkaninfo --summary > results/vulkaninfo.txt 2>&1 || true
         metaldarling/scripts/env-info.sh smoke > results/env.txt 2>&1 || true
 
