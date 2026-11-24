@@ -5,58 +5,58 @@
 
 [darling]
 repo = "darlinghq/darling"
-base = "1d8f60b259636cd000020356e86058dae556e705"           # master, 2026-11-23
-topics = [
-    { repo = "maleadt/darling", branch = "tb/launcher-zombie-server", commit = "eaf007e93c8e8cbeae175eebcfe345c6e99f733c" },
-    { repo = "maleadt/darling", branch = "tb/coredata-stub-install", commit = "6bd246cb5c6c71169c71a0eadad68f3dd9d0f7be" },
-]
+base = "6ac4c0d73747e041e971ac920933f3db6bb73659"           # master, 2026-11-24 (has #2506, #2507)
 
 # Overrides are applied outermost first; a component's own submodules are initialized from
 # the result, so indium below is the one darling-metal's merged tree would pin, then replaced.
+# darlingserver, xnu and syslog only move to upstream commits newer than darling's pins.
 [[darling.override]]
 path = "src/external/darlingserver"
 repo = "darlinghq/darlingserver"
-base = "a31d7b9509abf51fb6f0163320caaf17d7f6de5f"           # main, 2026-11-23 (darling pins 7edc8eb)
-topics = [
-    { repo = "maleadt/darlingserver", branch = "tb/suspend-during-exception", commit = "9016893e5867824cfb9bf91708d9b3312d310a50" },
-    { repo = "maleadt/darlingserver", branch = "tb/exception-state", commit = "4264590f3ddcb4977cdbda83d0176746a6fbfe63" },
-    { repo = "maleadt/darlingserver", branch = "tb/exc-bad-access-code", commit = "386e399c43adf542fc9554dc72d0815711906bbe" },
-    { repo = "maleadt/darlingserver", branch = "tb/thread-abort", commit = "079c33039bdba3571bb74a9358533e1603b1f09a" },
-]
+base = "09146c9312b3cc1b2f61e578b886ed50f02ff901"           # main, 2026-11-24 (has #106-#109; darling pins e9bbb29)
 
-# The branch is based on a later main; its one commit applies to darling's pin.
 [[darling.override]]
 path = "src/external/xnu"
 repo = "darlinghq/darling-xnu"
-base = "f2d41ae1f9d89105ff809b075012757101e20c48"           # darling's pin
-topics = [
-    { repo = "maleadt/darling-xnu", branch = "tb/exception-state", commit = "5a91cc2a97d7f52a430bb0aafa61f5889755028c", pick = true },
-]
+base = "3d6c8eb8609e9ef27801535ad57f45ca5d89c529"           # main, 2026-11-24 (has #154; darling pins 3afeb85)
 
 [[darling.override]]
 path = "src/external/syslog"
 repo = "darlinghq/darling-syslog"
-base = "55aab056c72d2505268f899a08af1c556675433a"           # darling's pin
-topics = [
-    { repo = "maleadt/darling-syslog", branch = "tb/syslogd-startup-deadlock", commit = "03bc3d135ad1d3f0e8815602132e2f4eb4c47f9f" },
-]
+base = "72330695b8f671dfde952755a23169279f1235f5"           # master, 2026-11-24 (has #5; darling pins 55aab05)
 
+# The four branches each add a test to the same list in test/guest/build.sh, so they are
+# merged, in this order, on one branch: tb/empty-library (0ad9c45), tb/msl-function-constants
+# (bdf78b7), tb/function-constant-types (e0dc60b, on msl-function-constants) and
+# tb/library-function-names (adbb185). They need indium #71-#73 and mslc #8 and #9 below.
 [[darling.override]]
 path = "src/external/metal"
 repo = "darlinghq/darling-metal"
-base = "803a408bced80a5a2147063391a86fbe9f325409"           # darling's pin (main, 2026-11-23)
+base = "3c98ce3f381fb075a5d2432cea8546abe3b4f247"           # main, 2026-11-24 (has #76-#85; darling pins a1e1cee)
 topics = [
-    { repo = "maleadt/darling-metal", branch = "tb/device-threadgroup-limits", commit = "810d00311f1306853a8d691d3089522705d73e55" },
-    { repo = "maleadt/darling-metal", branch = "tb/device-max-transfer-rate", commit = "b241bddfd31e081fc5b71818debedd7a010625d2" },
-    { repo = "maleadt/darling-metal", branch = "tb/pipeline-reflection-bindings", commit = "ef9188288d64456dd473c4f5e38a40e5237f0b05" },
+    { repo = "maleadt/darling-metal", branch = "tb/metaldarling-stack", commit = "8493432a85cbf24a2c80a3c1f51b4b8cd662d795" },
 ]
 
+# One branch: darlinghq/indium #53, #54, #56-#79 merged in PR order at their heads (#59 builds
+# on #56, #75 on #74 and #76 on #75), then the byte-addressing prototype of
+# tb/addressing-prototype (96a6c66; issue #52), ported onto #53, and a fix-up of air-ops'
+# kernel list for #54 with #73.
 [[darling.override]]
 path = "src/external/metal/deps/indium"
 repo = "darlinghq/indium"
-base = "329f82e2aea0094c098c447ea177549060b314a1"           # darling-metal's pin (main, 2026-11-23)
+base = "34b2cb2c4dd8895f78b31d1ad508c915076970aa"           # main, 2026-11-24 (darling-metal pins 329f82e)
 topics = [
-    { repo = "maleadt/indium", branch = "tb/addressing-prototype", commit = "96a6c66abd339c9334c70501a793242bb13bdfab" },
+    { repo = "maleadt/indium", branch = "tb/metaldarling-stack", commit = "7148ed3a48ebf513d9dc23ef2e4d6c46117dedc8" },
+]
+
+# One branch: darlinghq/mslc #7, #8 and #9 merged in order (#8 and #9 both extend
+# tests/library_api.c).
+[[darling.override]]
+path = "src/external/metal/deps/mslc"
+repo = "darlinghq/mslc"
+base = "74d0f8992c4947a753a7903f1ff8a74915e560de"           # master, 2026-11-22 (darling-metal's pin)
+topics = [
+    { repo = "maleadt/mslc", branch = "tb/metaldarling-stack", commit = "4289f887888d2eacc821c19ff96d43e8422d6ef0" },
 ]
 
 # The official macOS x86_64 Julia, unpacked into the image.
@@ -68,7 +68,4 @@ sha256 = "c84de0fcb4268841f296fd56c47c27383d81358033428389b0d1882b110b9bcd"
 # The Metal.jl the smoke test runs the survey with.
 [metal]
 repo = "JuliaGPU/Metal.jl"
-base = "46b81d7e0db51beede1f9accb309c9c48c3c38e8"           # tb/capability-probes (#1174)
-topics = [
-    { repo = "JuliaGPU/Metal.jl", branch = "tb/simd-width", commit = "afbc4e8fb5e413bcf6051cb04a2a0e666f0b5c57" },   # #1175
-]
+base = "80822e14041d19f4a80e5e0644d80c55f7d3a49f"           # tb/residency-set-descriptor (#1183, on #1174-#1182)
