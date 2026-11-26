@@ -5,25 +5,12 @@
 
 [darling]
 repo = "darlinghq/darling"
-base = "6ac4c0d73747e041e971ac920933f3db6bb73659"           # master, 2026-11-24 (has #2506, #2507)
+base = "bfd3cae463fd45a4cfd1b164d438e68b73e35ab6"           # master, 2026-11-25, the last that passes its CI
 
 # Overrides are applied outermost first; a component's own submodules are initialized from
 # the result, so indium below is the one darling-metal's merged tree would pin, then replaced.
-# darlingserver, xnu and syslog only move to upstream commits newer than darling's pins.
-[[darling.override]]
-path = "src/external/darlingserver"
-repo = "darlinghq/darlingserver"
-base = "09146c9312b3cc1b2f61e578b886ed50f02ff901"           # main, 2026-11-24 (has #106-#109; darling pins e9bbb29)
-
-[[darling.override]]
-path = "src/external/xnu"
-repo = "darlinghq/darling-xnu"
-base = "3d6c8eb8609e9ef27801535ad57f45ca5d89c529"           # main, 2026-11-24 (has #154; darling pins 3afeb85)
-
-[[darling.override]]
-path = "src/external/syslog"
-repo = "darlinghq/darling-syslog"
-base = "72330695b8f671dfde952755a23169279f1235f5"           # master, 2026-11-24 (has #5; darling pins 55aab05)
+# darlingserver (3604875), xnu (bca1777) and syslog (7233069) are darling's pins, which have
+# darlingserver#106-#109, darling-xnu#154 and darling-syslog#5.
 
 # The four branches each add a test to the same list in test/guest/build.sh, so they are
 # merged, in this order, on one branch: tb/empty-library (0ad9c45), tb/msl-function-constants
@@ -32,21 +19,21 @@ base = "72330695b8f671dfde952755a23169279f1235f5"           # master, 2026-11-24
 [[darling.override]]
 path = "src/external/metal"
 repo = "darlinghq/darling-metal"
-base = "3c98ce3f381fb075a5d2432cea8546abe3b4f247"           # main, 2026-11-24 (has #76-#85; darling pins a1e1cee)
+base = "25d6c0f32cc21b274d285f453abbf787e9c5d698"           # darling's pin (has #76-#85)
 topics = [
     { repo = "maleadt/darling-metal", branch = "tb/metaldarling-stack", commit = "8493432a85cbf24a2c80a3c1f51b4b8cd662d795" },
 ]
 
-# One branch: darlinghq/indium #53, #54, #56-#79 merged in PR order at their heads (#59 builds
-# on #56, #75 on #74 and #76 on #75), then the byte-addressing prototype of
+# One branch: darlinghq/indium #53, #54, #57, #58, #61-#79 merged in PR order at their heads
+# (#75 builds on #74 and #76 on #75), then the byte-addressing prototype of
 # tb/addressing-prototype (96a6c66; issue #52), ported onto #53, and a fix-up of air-ops'
 # kernel list for #54 with #73.
 [[darling.override]]
 path = "src/external/metal/deps/indium"
 repo = "darlinghq/indium"
-base = "34b2cb2c4dd8895f78b31d1ad508c915076970aa"           # main, 2026-11-24 (darling-metal pins 329f82e)
+base = "0ff7be1318756670fb47e5aa0129056488715b30"           # main, 2026-11-26 (has #55, #56, #59, #60; darling-metal pins d130b79)
 topics = [
-    { repo = "maleadt/indium", branch = "tb/metaldarling-stack", commit = "7148ed3a48ebf513d9dc23ef2e4d6c46117dedc8" },
+    { repo = "maleadt/indium", branch = "tb/metaldarling-stack", commit = "88aae3f01f122df7f8dace42c6e5d92a203551eb" },
 ]
 
 # One branch: darlinghq/mslc #7, #8 and #9 merged in order (#8 and #9 both extend
